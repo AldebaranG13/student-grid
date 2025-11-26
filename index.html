@@ -10,13 +10,13 @@
         // === ⚙️ CONFIGURATION ===
         const appConfig = {
             appName: "Student Grid",
-            footerText: "© 2025 Open Student Network • Node v3.0 (Social)",
+            footerText: "© 2025 Open Student Network • Node v3.1 (No-Index)",
             themeColor: "#1967d2" 
         };
 
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, setDoc, doc, query, where, orderBy, onSnapshot, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, setDoc, doc, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
         // ===========================================================
         // 🔑 KEYS LOCKED IN
@@ -37,7 +37,6 @@
         const db = getFirestore(app);
         const provider = new GoogleAuthProvider();
 
-        // STATE
         let currentRoom = "Global";
         let unsubscribe = null;     
 
@@ -52,56 +51,39 @@
         const brandName = document.getElementById('brandName');
         const userAvatar = document.getElementById('userAvatar');
         const roomTitle = document.getElementById('roomTitle');
-        const userList = document.getElementById('userList'); // NEW: Sidebar List
+        const userList = document.getElementById('userList');
 
-        // Apply Branding
         brandName.innerText = appConfig.appName;
         document.querySelector('footer').innerText = appConfig.footerText;
 
-        // --- LOGIN ---
-        loginBtn.addEventListener('click', () => {
-            signInWithPopup(auth, provider).catch(err => console.error(err));
-        });
+        // --- AUTHENTICATION ---
+        loginBtn.addEventListener('click', () => signInWithPopup(auth, provider).catch(console.error));
+        logoutBtn.addEventListener('click', () => { signOut(auth); document.title = "Student Grid | Login"; });
 
-        // --- LOGOUT ---
-        logoutBtn.addEventListener('click', () => {
-            signOut(auth);
-            document.title = "Student Grid | Login"; 
-        });
-
-        // --- AUTH LISTENER ---
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 loginInterface.style.display = 'none';
                 appInterface.style.display = 'flex';
                 renderAvatar(user);
-                
-                // 1. Save User to Database (So others can DM them)
                 await saveUserToDB(user);
-                
-                // 2. Load Classmates List
                 loadUserList();
-
-                // 3. Load Global Chat
                 switchRoom("Global"); 
             } else {
                 loginInterface.style.display = 'flex';
                 appInterface.style.display = 'none';
                 userAvatar.innerHTML = '';
-                document.title = "Student Grid | Login";
             }
         });
 
-        // --- SAVE USER TO FIRESTORE ---
         async function saveUserToDB(user) {
             try {
                 await setDoc(doc(db, "users", user.uid), {
                     displayName: user.displayName,
                     photoURL: user.photoURL,
-                    lastSeen: new Date(),
-                    uid: user.uid
+                    uid: user.uid,
+                    lastSeen: new Date().toISOString()
                 }, { merge: true });
-            } catch (e) { console.error("Error saving user:", e); }
+            } catch (e) { console.error(e); }
         }
 
         function renderAvatar(user) {
@@ -116,54 +98,34 @@
             if (newName && newName.trim() !== "") {
                 try {
                     await updateProfile(user, { displayName: newName });
-                    await saveUserToDB(user); // Update name in DB too
+                    await saveUserToDB(user);
                     renderAvatar(user);
                 } catch (error) { console.error(error); }
             }
         }
 
-        // --- START PRIVATE DM ---
+        // --- NAVIGATION ---
         window.startDM = function(targetUid, targetName) {
-            const myUid = auth.currentUser.uid;
-            
-            // Prevent DMing yourself
-            if(targetUid === myUid) {
-                alert("You cannot DM yourself (yet).");
-                return;
-            }
-
-            // Create Unique Room ID: Sort IDs so it's always "ID1_ID2"
-            // This ensures both people enter the SAME room.
-            const dmRoomId = [myUid, targetUid].sort().join("_");
-            
-            // Switch to Room
+            if(targetUid === auth.currentUser.uid) return alert("You cannot DM yourself.");
+            const dmRoomId = [auth.currentUser.uid, targetUid].sort().join("_");
             switchRoom(dmRoomId, `🔒 ${targetName}`);
         }
 
-        // --- SWITCH ROOM ---
         window.switchRoom = function(roomName, displayTitle = null) {
             currentRoom = roomName;
-            
-            // UI Updates
-            const title = displayTitle || `# ${roomName}`;
-            roomTitle.innerText = title;
+            roomTitle.innerText = displayTitle || `# ${roomName}`;
             document.title = `Grid | ${displayTitle || roomName}`;
-            
-            // Highlight
             document.querySelectorAll('.nav-item, .user-item').forEach(el => el.classList.remove('active'));
-            
             loadMessages(roomName);
         }
 
-        // --- LOAD USER LIST (SIDEBAR) ---
         function loadUserList() {
-            const q = query(collection(db, "users"), limit(20)); // Limit to 20 for now
+            const q = query(collection(db, "users"));
             onSnapshot(q, (snapshot) => {
                 userList.innerHTML = '';
                 snapshot.forEach((doc) => {
                     const u = doc.data();
-                    if(u.uid === auth.currentUser.uid) return; // Don't show myself
-
+                    if(u.uid === auth.currentUser.uid) return;
                     const div = document.createElement('div');
                     div.className = 'user-item';
                     div.innerHTML = `<span class="status-dot">●</span> ${u.displayName.split(' ')[0]}`;
@@ -173,7 +135,7 @@
             });
         }
 
-        // --- SEND MESSAGE ---
+        // --- MESSAGING ---
         const sendMessage = async () => {
             const text = msgInput.value;
             const user = auth.currentUser;
@@ -186,10 +148,10 @@
                     displayName: user.displayName, 
                     photoURL: user.photoURL,
                     room: currentRoom,
-                    createdAt: new Date()
+                    createdAt: new Date().toISOString() // Use string for easier sorting
                 });
                 msgInput.value = "";
-            } catch (e) { console.error("Error sending: ", e); }
+            } catch (e) { console.error(e); }
         };
 
         sendBtn.addEventListener('click', sendMessage);
@@ -197,28 +159,34 @@
             if (e.key === 'Enter') sendMessage();
         });
 
-        // --- LOAD MESSAGES ---
+        // --- LOAD MESSAGES (CLIENT SIDE SORTING) ---
         function loadMessages(room) {
             if (unsubscribe) unsubscribe();
-            chatBox.innerHTML = '<div class="loading">Establishing connection...</div>';
+            chatBox.innerHTML = '<div class="loading">Syncing node...</div>';
 
-            const q = query(collection(db, "messages"), where("room", "==", room), orderBy("createdAt"), limit(50));
+            // REMOVED 'orderBy' to bypass Index Requirement
+            const q = query(collection(db, "messages"), where("room", "==", room));
             
             unsubscribe = onSnapshot(q, (snapshot) => {
                 chatBox.innerHTML = ''; 
                 if(snapshot.empty) {
-                    chatBox.innerHTML = '<div class="loading">Chat initialized. Say hello!</div>';
+                    chatBox.innerHTML = '<div class="loading">No messages yet.</div>';
                     return;
                 }
 
-                snapshot.forEach((doc) => {
-                    const msg = doc.data();
+                // 1. Get all messages
+                let msgs = [];
+                snapshot.forEach(doc => msgs.push(doc.data()));
+
+                // 2. Sort them in Javascript (Browser) instead of Database
+                msgs.sort((a, b) => (a.createdAt > b.createdAt) ? 1 : -1);
+
+                // 3. Render
+                msgs.forEach((msg) => {
                     const isMe = auth.currentUser && msg.uid === auth.currentUser.uid;
                     const msgDiv = document.createElement('div');
                     msgDiv.className = `message-item ${isMe ? 'me' : ''}`;
                     const safeName = msg.displayName ? msg.displayName.split(' ')[0] : "User";
-
-                    // Allow clicking avatar to DM
                     const clickAction = isMe ? '' : `onclick="startDM('${msg.uid}', '${safeName}')" style="cursor:pointer" title="DM this user"`;
 
                     msgDiv.innerHTML = `
@@ -233,14 +201,6 @@
                     chatBox.appendChild(msgDiv);
                 });
                 chatBox.scrollTop = chatBox.scrollHeight;
-            }, (error) => {
-                 if (error.message.includes("requires an index")) {
-                    chatBox.innerHTML = `<div class="index-warning">
-                        <strong>⚠️ SYSTEM UPDATE</strong><br>
-                        Creating secure channel...<br>
-                        <a href="${error.message.match(/https:\/\/[^ ]+/)[0]}" target="_blank" style="color:red">CLICK HERE TO FIX</a>
-                    </div>`;
-                }
             });
         }
     </script>
@@ -248,56 +208,38 @@
     <style>
         :root { --bg: #f8f9fa; --white: #ffffff; --border: #dadce0; --blue: #1967d2; --text: #3c4043; --gray: #5f6368; }
         body { font-family: 'Roboto', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
-        
-        /* HEADER */
         header { height: 64px; background: var(--white); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; justify-content: space-between; }
         .brand { display: flex; align-items: center; gap: 12px; }
         .logo-text { font-size: 20px; font-weight: 500; }
         #userAvatar img { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
         #userAvatar img:hover { border-color: var(--blue); }
-
-        /* LOGIN */
         #loginInterface { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
         #loginBtn { background: var(--blue); color: white; border: none; padding: 12px 30px; border-radius: 4px; cursor: pointer; font-size: 16px; }
-
-        /* APP */
         #appInterface { display: none; height: calc(100vh - 65px); display: flex; }
-        
         aside { width: 260px; background: var(--white); border-right: 1px solid var(--border); padding: 20px; display: none; flex-direction: column; overflow-y: auto; }
         @media(min-width: 768px) { aside { display: flex; } }
-
         .section-header { font-size: 11px; font-weight: bold; color: var(--gray); text-transform: uppercase; margin: 20px 0 10px; letter-spacing: 0.5px; }
         .section-header:first-child { margin-top: 0; }
-
         .nav-item, .user-item { padding: 8px 12px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); margin-bottom: 2px; }
         .nav-item:hover, .user-item:hover { background: #f1f3f4; }
         .active { background: #e8f0fe; color: var(--blue); font-weight: 500; }
-        
-        .status-dot { color: #1e8e3e; font-size: 10px; } /* Green dot for online */
-
-        /* CHAT */
+        .status-dot { color: #1e8e3e; font-size: 10px; }
         main { flex: 1; display: flex; flex-direction: column; background: var(--white); }
         #room-header { padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 500; color: var(--text); font-size: 16px; }
-        
         #chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
         .loading { text-align: center; color: #ccc; margin-top: 20px; font-size: 14px; }
-        .index-warning { background: #fee; color: #c00; padding: 20px; text-align: center; border-radius: 8px; margin: 20px; border: 1px solid #fcc; }
-
         .message-item { display: flex; gap: 10px; max-width: 75%; animation: fadeIn 0.2s; }
         .message-item.me { align-self: flex-end; flex-direction: row-reverse; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-
         .avatar-small img { width: 32px; height: 32px; border-radius: 50%; }
         .msg-content { padding: 10px 14px; border-radius: 18px; background: #f1f3f4; font-size: 14px; line-height: 1.4; }
         .message-item.me .msg-content { background: var(--blue); color: white; }
         .msg-header { font-size: 11px; margin-bottom: 4px; font-weight: bold; color: var(--gray); }
         .message-item.me .msg-header { display: none; }
-
         .input-container { padding: 15px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
         input { flex: 1; padding: 12px 20px; border: 1px solid var(--border); border-radius: 24px; outline: none; background: #f8f9fa; }
         input:focus { background: var(--white); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         button#sendBtn { background: none; border: none; color: var(--blue); font-size: 20px; cursor: pointer; }
-
         footer { text-align: center; font-size: 11px; color: #ccc; padding: 5px; background: var(--bg); }
     </style>
 </head>
@@ -326,7 +268,7 @@
             <div class="nav-item" onclick="switchRoom('Physics-7B')"><span>⚛️</span> Physics 7B</div>
             <div class="nav-item" onclick="switchRoom('Gaming')"><span>🎮</span> Gaming</div>
 
-            <div class="section-header">Classmates (Direct Link)</div>
+            <div class="section-header">Classmates</div>
             <div id="userList">
                 <div style="padding:10px; font-size:12px; color:#999;">Waiting for users...</div>
             </div>
