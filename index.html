@@ -3,25 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grid | Student Portal</title>
-    
+    <title>Student Grid | Login</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     
     <script type="module">
-        // === ⚙️ APP CONFIGURATION ===
+        // === ⚙️ CONFIGURATION ===
         const appConfig = {
             appName: "Student Grid",
-            footerText: "© 2025 Open Student Network • Secure Node v1.4",
+            footerText: "© 2025 Open Student Network • Node v3.0 (Social)",
             themeColor: "#1967d2" 
         };
 
-        // Import Firebase (Standard Google Servers)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, setDoc, doc, query, where, orderBy, onSnapshot, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
         // ===========================================================
-        // 🚨 PASTE YOUR FIREBASE KEYS BELOW THIS LINE 🚨
+        // 🔑 KEYS LOCKED IN
         // ===========================================================
         const firebaseConfig = {
             apiKey: "AIzaSyDb0JiAH1fFBbcLfF8pmteX2U7ViBkAfqE",
@@ -34,13 +32,16 @@
         };
         // ===========================================================
 
-        // Initialize App
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
         const provider = new GoogleAuthProvider();
 
-        // Elements
+        // STATE
+        let currentRoom = "Global";
+        let unsubscribe = null;     
+
+        // DOM Elements
         const loginBtn = document.getElementById('loginBtn');
         const logoutBtn = document.getElementById('logoutBtn');
         const appInterface = document.getElementById('appInterface');
@@ -48,52 +49,147 @@
         const msgInput = document.getElementById('msgInput');
         const sendBtn = document.getElementById('sendBtn');
         const chatBox = document.getElementById('chat-box');
-        
+        const brandName = document.getElementById('brandName');
+        const userAvatar = document.getElementById('userAvatar');
+        const roomTitle = document.getElementById('roomTitle');
+        const userList = document.getElementById('userList'); // NEW: Sidebar List
+
         // Apply Branding
-        document.getElementById('brandName').innerText = appConfig.appName;
+        brandName.innerText = appConfig.appName;
         document.querySelector('footer').innerText = appConfig.footerText;
 
-        // --- LOGIN LOGIC ---
+        // --- LOGIN ---
         loginBtn.addEventListener('click', () => {
             signInWithPopup(auth, provider).catch(err => console.error(err));
         });
 
-        logoutBtn.addEventListener('click', () => signOut(auth));
+        // --- LOGOUT ---
+        logoutBtn.addEventListener('click', () => {
+            signOut(auth);
+            document.title = "Student Grid | Login"; 
+        });
 
-        // --- CHECK IF USER IS LOGGED IN ---
-        onAuthStateChanged(auth, (user) => {
+        // --- AUTH LISTENER ---
+        onAuthStateChanged(auth, async (user) => {
             if (user) {
                 loginInterface.style.display = 'none';
                 appInterface.style.display = 'flex';
-                // Show User Avatar
-                document.getElementById('userAvatar').innerHTML = `<img src="${user.photoURL}" title="${user.displayName}">`;
-                loadMessages(); 
+                renderAvatar(user);
+                
+                // 1. Save User to Database (So others can DM them)
+                await saveUserToDB(user);
+                
+                // 2. Load Classmates List
+                loadUserList();
+
+                // 3. Load Global Chat
+                switchRoom("Global"); 
             } else {
                 loginInterface.style.display = 'flex';
                 appInterface.style.display = 'none';
-                document.getElementById('userAvatar').innerHTML = '';
+                userAvatar.innerHTML = '';
+                document.title = "Student Grid | Login";
             }
         });
+
+        // --- SAVE USER TO FIRESTORE ---
+        async function saveUserToDB(user) {
+            try {
+                await setDoc(doc(db, "users", user.uid), {
+                    displayName: user.displayName,
+                    photoURL: user.photoURL,
+                    lastSeen: new Date(),
+                    uid: user.uid
+                }, { merge: true });
+            } catch (e) { console.error("Error saving user:", e); }
+        }
+
+        function renderAvatar(user) {
+            const imgTag = user.photoURL ? `<img src="${user.photoURL}">` : `<div class="letter-avatar">${user.displayName.charAt(0)}</div>`;
+            userAvatar.innerHTML = imgTag;
+            userAvatar.onclick = changeUsername;
+        }
+
+        async function changeUsername() {
+            const user = auth.currentUser;
+            const newName = prompt("Edit your Display Name:", user.displayName);
+            if (newName && newName.trim() !== "") {
+                try {
+                    await updateProfile(user, { displayName: newName });
+                    await saveUserToDB(user); // Update name in DB too
+                    renderAvatar(user);
+                } catch (error) { console.error(error); }
+            }
+        }
+
+        // --- START PRIVATE DM ---
+        window.startDM = function(targetUid, targetName) {
+            const myUid = auth.currentUser.uid;
+            
+            // Prevent DMing yourself
+            if(targetUid === myUid) {
+                alert("You cannot DM yourself (yet).");
+                return;
+            }
+
+            // Create Unique Room ID: Sort IDs so it's always "ID1_ID2"
+            // This ensures both people enter the SAME room.
+            const dmRoomId = [myUid, targetUid].sort().join("_");
+            
+            // Switch to Room
+            switchRoom(dmRoomId, `🔒 ${targetName}`);
+        }
+
+        // --- SWITCH ROOM ---
+        window.switchRoom = function(roomName, displayTitle = null) {
+            currentRoom = roomName;
+            
+            // UI Updates
+            const title = displayTitle || `# ${roomName}`;
+            roomTitle.innerText = title;
+            document.title = `Grid | ${displayTitle || roomName}`;
+            
+            // Highlight
+            document.querySelectorAll('.nav-item, .user-item').forEach(el => el.classList.remove('active'));
+            
+            loadMessages(roomName);
+        }
+
+        // --- LOAD USER LIST (SIDEBAR) ---
+        function loadUserList() {
+            const q = query(collection(db, "users"), limit(20)); // Limit to 20 for now
+            onSnapshot(q, (snapshot) => {
+                userList.innerHTML = '';
+                snapshot.forEach((doc) => {
+                    const u = doc.data();
+                    if(u.uid === auth.currentUser.uid) return; // Don't show myself
+
+                    const div = document.createElement('div');
+                    div.className = 'user-item';
+                    div.innerHTML = `<span class="status-dot">●</span> ${u.displayName.split(' ')[0]}`;
+                    div.onclick = () => startDM(u.uid, u.displayName.split(' ')[0]);
+                    userList.appendChild(div);
+                });
+            });
+        }
 
         // --- SEND MESSAGE ---
         const sendMessage = async () => {
             const text = msgInput.value;
             const user = auth.currentUser;
-
             if (text.trim() === "" || !user) return;
 
             try {
                 await addDoc(collection(db, "messages"), {
                     text: text,
                     uid: user.uid,
-                    displayName: user.displayName,
+                    displayName: user.displayName, 
                     photoURL: user.photoURL,
-                    createdAt: new Date() // Server timestamp
+                    room: currentRoom,
+                    createdAt: new Date()
                 });
                 msgInput.value = "";
-            } catch (e) {
-                console.error("Error sending: ", e);
-            }
+            } catch (e) { console.error("Error sending: ", e); }
         };
 
         sendBtn.addEventListener('click', sendMessage);
@@ -101,262 +197,147 @@
             if (e.key === 'Enter') sendMessage();
         });
 
-        // --- REAL-TIME CHAT LISTENER ---
-        function loadMessages() {
-            // Get last 50 messages
-            const q = query(collection(db, "messages"), orderBy("createdAt"), limit(50));
+        // --- LOAD MESSAGES ---
+        function loadMessages(room) {
+            if (unsubscribe) unsubscribe();
+            chatBox.innerHTML = '<div class="loading">Establishing connection...</div>';
+
+            const q = query(collection(db, "messages"), where("room", "==", room), orderBy("createdAt"), limit(50));
             
-            onSnapshot(q, (snapshot) => {
+            unsubscribe = onSnapshot(q, (snapshot) => {
                 chatBox.innerHTML = ''; 
+                if(snapshot.empty) {
+                    chatBox.innerHTML = '<div class="loading">Chat initialized. Say hello!</div>';
+                    return;
+                }
+
                 snapshot.forEach((doc) => {
                     const msg = doc.data();
-                    const isMe = msg.uid === auth.currentUser.uid;
-                    
+                    const isMe = auth.currentUser && msg.uid === auth.currentUser.uid;
                     const msgDiv = document.createElement('div');
                     msgDiv.className = `message-item ${isMe ? 'me' : ''}`;
-                    
-                    // Safe Name Display (First Name only)
-                    const shortName = msg.displayName ? msg.displayName.split(' ')[0] : 'User';
+                    const safeName = msg.displayName ? msg.displayName.split(' ')[0] : "User";
+
+                    // Allow clicking avatar to DM
+                    const clickAction = isMe ? '' : `onclick="startDM('${msg.uid}', '${safeName}')" style="cursor:pointer" title="DM this user"`;
 
                     msgDiv.innerHTML = `
-                        <div class="avatar"><img src="${msg.photoURL}"></div>
+                        <div class="avatar-small" ${clickAction}>
+                            <img src="${msg.photoURL}" onerror="this.style.display='none'">
+                        </div>
                         <div class="msg-content">
-                            <div class="msg-header">${shortName}</div>
+                            <div class="msg-header">${safeName}</div>
                             <div class="msg-text">${msg.text}</div>
                         </div>
                     `;
                     chatBox.appendChild(msgDiv);
                 });
-                // Auto-scroll to bottom
                 chatBox.scrollTop = chatBox.scrollHeight;
+            }, (error) => {
+                 if (error.message.includes("requires an index")) {
+                    chatBox.innerHTML = `<div class="index-warning">
+                        <strong>⚠️ SYSTEM UPDATE</strong><br>
+                        Creating secure channel...<br>
+                        <a href="${error.message.match(/https:\/\/[^ ]+/)[0]}" target="_blank" style="color:red">CLICK HERE TO FIX</a>
+                    </div>`;
+                }
             });
         }
     </script>
 
     <style>
-        /* === THE STUDENT GRID THEME === */
-        :root {
-            --bg-color: #f8f9fa;
-            --header-bg: #ffffff;
-            --border-color: #dadce0;
-            --primary-blue: #1967d2;
-            --text-main: #3c4043;
-            --text-light: #5f6368;
-        }
-
-        body {
-            font-family: 'Roboto', sans-serif;
-            margin: 0;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-        }
-
+        :root { --bg: #f8f9fa; --white: #ffffff; --border: #dadce0; --blue: #1967d2; --text: #3c4043; --gray: #5f6368; }
+        body { font-family: 'Roboto', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+        
         /* HEADER */
-        header {
-            height: 64px;
-            background: var(--header-bg);
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            padding: 0 24px;
-            justify-content: space-between;
-            position: fixed;
-            width: 100%;
-            top: 0;
-            z-index: 100;
-            box-sizing: border-box;
-        }
+        header { height: 64px; background: var(--white); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .logo-text { font-size: 20px; font-weight: 500; }
+        #userAvatar img { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+        #userAvatar img:hover { border-color: var(--blue); }
 
-        .brand-container { display: flex; align-items: center; gap: 12px; }
+        /* LOGIN */
+        #loginInterface { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #loginBtn { background: var(--blue); color: white; border: none; padding: 12px 30px; border-radius: 4px; cursor: pointer; font-size: 16px; }
+
+        /* APP */
+        #appInterface { display: none; height: calc(100vh - 65px); display: flex; }
         
-        /* THE NODE LOGO STYLING */
-        .node-logo { stroke: var(--primary-blue); }
-        
-        .logo-text { font-size: 20px; font-weight: 500; color: var(--text-main); }
-        
-        #userAvatar img { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; }
-
-        /* LOGIN PAGE */
-        #loginInterface {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            margin-top: 64px;
-        }
-        #loginBtn {
-            background-color: var(--primary-blue);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            font-size: 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: 500;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-        }
-        #loginBtn:hover { background-color: #174ea6; }
-
-        /* APP LAYOUT */
-        #appInterface {
-            display: none; /* Hidden until login */
-            margin-top: 64px;
-            height: calc(100vh - 64px);
-            display: flex;
-        }
-
-        /* SIDEBAR (DMs & Rooms) */
-        aside {
-            width: 260px;
-            background: white;
-            border-right: 1px solid var(--border-color);
-            padding: 20px;
-            display: none; /* Hidden on mobile */
-            flex-direction: column;
-        }
+        aside { width: 260px; background: var(--white); border-right: 1px solid var(--border); padding: 20px; display: none; flex-direction: column; overflow-y: auto; }
         @media(min-width: 768px) { aside { display: flex; } }
 
-        .section-title {
-            font-size: 12px; font-weight: bold; color: var(--text-light);
-            text-transform: uppercase; margin-bottom: 12px; margin-top: 20px;
-        }
-        .section-title:first-child { margin-top: 0; }
+        .section-header { font-size: 11px; font-weight: bold; color: var(--gray); text-transform: uppercase; margin: 20px 0 10px; letter-spacing: 0.5px; }
+        .section-header:first-child { margin-top: 0; }
 
-        .nav-item {
-            padding: 10px 15px;
-            border-radius: 0 20px 20px 0;
-            cursor: pointer;
-            color: var(--text-main);
-            display: flex; align-items: center; gap: 10px;
-            font-size: 14px; font-weight: 500;
-        }
-        .nav-item:hover { background: #f1f3f4; }
-        .nav-item.active { background: #e8f0fe; color: var(--primary-blue); }
-
-        /* CHAT AREA */
-        main {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: white;
-        }
-
-        #chat-box {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        /* MESSAGES */
-        .message-item { display: flex; gap: 12px; max-width: 80%; }
-        .message-item.me { align-self: flex-end; flex-direction: row-reverse; }
-
-        .avatar img { width: 32px; height: 32px; border-radius: 50%; }
+        .nav-item, .user-item { padding: 8px 12px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); margin-bottom: 2px; }
+        .nav-item:hover, .user-item:hover { background: #f1f3f4; }
+        .active { background: #e8f0fe; color: var(--blue); font-weight: 500; }
         
-        .msg-content {
-            padding: 10px 16px;
-            border-radius: 18px;
-            background: #f1f3f4;
-            color: var(--text-main);
-            position: relative;
-        }
-        .message-item.me .msg-content {
-            background: var(--primary-blue);
-            color: white;
-        }
+        .status-dot { color: #1e8e3e; font-size: 10px; } /* Green dot for online */
 
-        .msg-header {
-            font-size: 11px;
-            margin-bottom: 4px;
-            font-weight: bold;
-            opacity: 0.7;
-        }
-        .message-item.me .msg-header { display: none; } /* Hide my name */
+        /* CHAT */
+        main { flex: 1; display: flex; flex-direction: column; background: var(--white); }
+        #room-header { padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 500; color: var(--text); font-size: 16px; }
+        
+        #chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+        .loading { text-align: center; color: #ccc; margin-top: 20px; font-size: 14px; }
+        .index-warning { background: #fee; color: #c00; padding: 20px; text-align: center; border-radius: 8px; margin: 20px; border: 1px solid #fcc; }
 
-        /* INPUT AREA */
-        .input-container {
-            padding: 15px 20px;
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            gap: 10px;
-            background: white;
-        }
+        .message-item { display: flex; gap: 10px; max-width: 75%; animation: fadeIn 0.2s; }
+        .message-item.me { align-self: flex-end; flex-direction: row-reverse; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-        input {
-            flex: 1;
-            padding: 12px 20px;
-            border: 1px solid var(--border-color);
-            border-radius: 24px;
-            font-size: 15px;
-            outline: none;
-            background: #f8f9fa;
-        }
-        input:focus { background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+        .avatar-small img { width: 32px; height: 32px; border-radius: 50%; }
+        .msg-content { padding: 10px 14px; border-radius: 18px; background: #f1f3f4; font-size: 14px; line-height: 1.4; }
+        .message-item.me .msg-content { background: var(--blue); color: white; }
+        .msg-header { font-size: 11px; margin-bottom: 4px; font-weight: bold; color: var(--gray); }
+        .message-item.me .msg-header { display: none; }
 
-        button#sendBtn {
-            background: none; border: none;
-            color: var(--primary-blue);
-            font-size: 24px; cursor: pointer;
-            padding: 0 10px;
-        }
+        .input-container { padding: 15px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px 20px; border: 1px solid var(--border); border-radius: 24px; outline: none; background: #f8f9fa; }
+        input:focus { background: var(--white); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        button#sendBtn { background: none; border: none; color: var(--blue); font-size: 20px; cursor: pointer; }
 
-        /* FOOTER */
-        footer {
-            text-align: center;
-            font-size: 11px;
-            color: #9aa0a6;
-            padding: 10px;
-            background: var(--bg-color);
-        }
+        footer { text-align: center; font-size: 11px; color: #ccc; padding: 5px; background: var(--bg); }
     </style>
 </head>
 <body>
 
     <header>
-        <div class="brand-container">
-            <svg class="node-logo" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="18" cy="5" r="3"></circle>
-                <circle cx="6" cy="12" r="3"></circle>
-                <circle cx="18" cy="19" r="3"></circle>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+        <div class="brand">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1967d2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
             </svg>
             <div class="logo-text" id="brandName">Student Grid</div>
         </div>
-        <div id="userAvatar"></div>
+        <div id="userAvatar" title="Click to edit username"></div>
     </header>
 
     <div id="loginInterface">
-        <h2 style="color: #5f6368; margin-bottom: 10px;">Portal Access</h2>
-        <p style="color: #9aa0a6; margin-bottom: 30px; font-size: 14px;">Please verify your identity to continue.</p>
+        <h2 style="color: #5f6368;">Portal Access</h2>
         <button id="loginBtn">Sign in with Google</button>
     </div>
 
     <div id="appInterface">
         <aside>
-            <div class="section-title">Grid Rooms</div>
-            <div class="nav-item active"><span>📢</span> Global Announcements</div>
-            <div class="nav-item"><span>⚛️</span> Physics Class</div>
-            <div class="nav-item"><span>📐</span> Math Study Group</div>
-            
-            <div class="section-title">Direct Link</div>
-            <div class="nav-item"><span>👤</span> Group Leader (Umar)</div>
-            
+            <div class="section-header">Grid Rooms</div>
+            <div class="nav-item active" onclick="switchRoom('Global')"><span>📢</span> Global</div>
+            <div class="nav-item" onclick="switchRoom('Physics-7B')"><span>⚛️</span> Physics 7B</div>
+            <div class="nav-item" onclick="switchRoom('Gaming')"><span>🎮</span> Gaming</div>
+
+            <div class="section-header">Classmates (Direct Link)</div>
+            <div id="userList">
+                <div style="padding:10px; font-size:12px; color:#999;">Waiting for users...</div>
+            </div>
+
             <div style="flex:1"></div>
-            <button id="logoutBtn" style="background:none; border:none; color:red; text-align:left; cursor:pointer; padding:10px;">Disconnect</button>
+            <button id="logoutBtn" style="background:none; border:none; color:red; text-align:left; cursor:pointer; padding:10px; font-size:12px;">Disconnect</button>
         </aside>
 
         <main>
-            <div id="chat-box">
-                </div>
+            <div id="room-header"># Global</div>
+            <div id="chat-box"></div>
             <div class="input-container">
                 <input type="text" id="msgInput" placeholder="Type a message..." autocomplete="off">
                 <button id="sendBtn">➤</button>
@@ -364,7 +345,7 @@
         </main>
     </div>
 
-    <footer>Loading Footer...</footer>
+    <footer>Loading...</footer>
 
 </body>
 </html>
