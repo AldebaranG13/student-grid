@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid | Student Portal</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <script type="module">
+        // === ⚙️ APP CONFIGURATION ===
+        const appConfig = {
+            appName: "Student Grid",
+            footerText: "© 2025 Open Student Network • Secure Node v1.4",
+            themeColor: "#1967d2" 
+        };
+
+        // Import Firebase (Standard Google Servers)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // ===========================================================
+        // 🚨 PASTE YOUR FIREBASE KEYS BELOW THIS LINE 🚨
+        // ===========================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDb0JiAH1fFBbcLfF8pmteX2U7ViBkAfqE",
+            authDomain: "student-grid.firebaseapp.com",
+            projectId: "student-grid",
+            storageBucket: "student-grid.firebasestorage.app",
+            messagingSenderId: "34314858632",
+            appId: "1:34314858632:web:ce99f6b7e90d27a7f22f3d",
+            measurementId: "G-XVHGMWKVDD"
+        };
+        // ===========================================================
+
+        // Initialize App
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+
+        // Elements
+        const loginBtn = document.getElementById('loginBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const appInterface = document.getElementById('appInterface');
+        const loginInterface = document.getElementById('loginInterface');
+        const msgInput = document.getElementById('msgInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const chatBox = document.getElementById('chat-box');
+        
+        // Apply Branding
+        document.getElementById('brandName').innerText = appConfig.appName;
+        document.querySelector('footer').innerText = appConfig.footerText;
+
+        // --- LOGIN LOGIC ---
+        loginBtn.addEventListener('click', () => {
+            signInWithPopup(auth, provider).catch(err => console.error(err));
+        });
+
+        logoutBtn.addEventListener('click', () => signOut(auth));
+
+        // --- CHECK IF USER IS LOGGED IN ---
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                loginInterface.style.display = 'none';
+                appInterface.style.display = 'flex';
+                // Show User Avatar
+                document.getElementById('userAvatar').innerHTML = `<img src="${user.photoURL}" title="${user.displayName}">`;
+                loadMessages(); 
+            } else {
+                loginInterface.style.display = 'flex';
+                appInterface.style.display = 'none';
+                document.getElementById('userAvatar').innerHTML = '';
+            }
+        });
+
+        // --- SEND MESSAGE ---
+        const sendMessage = async () => {
+            const text = msgInput.value;
+            const user = auth.currentUser;
+
+            if (text.trim() === "" || !user) return;
+
+            try {
+                await addDoc(collection(db, "messages"), {
+                    text: text,
+                    uid: user.uid,
+                    displayName: user.displayName,
+                    photoURL: user.photoURL,
+                    createdAt: new Date() // Server timestamp
+                });
+                msgInput.value = "";
+            } catch (e) {
+                console.error("Error sending: ", e);
+            }
+        };
+
+        sendBtn.addEventListener('click', sendMessage);
+        msgInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        // --- REAL-TIME CHAT LISTENER ---
+        function loadMessages() {
+            // Get last 50 messages
+            const q = query(collection(db, "messages"), orderBy("createdAt"), limit(50));
+            
+            onSnapshot(q, (snapshot) => {
+                chatBox.innerHTML = ''; 
+                snapshot.forEach((doc) => {
+                    const msg = doc.data();
+                    const isMe = msg.uid === auth.currentUser.uid;
+                    
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = `message-item ${isMe ? 'me' : ''}`;
+                    
+                    // Safe Name Display (First Name only)
+                    const shortName = msg.displayName ? msg.displayName.split(' ')[0] : 'User';
+
+                    msgDiv.innerHTML = `
+                        <div class="avatar"><img src="${msg.photoURL}"></div>
+                        <div class="msg-content">
+                            <div class="msg-header">${shortName}</div>
+                            <div class="msg-text">${msg.text}</div>
+                        </div>
+                    `;
+                    chatBox.appendChild(msgDiv);
+                });
+                // Auto-scroll to bottom
+                chatBox.scrollTop = chatBox.scrollHeight;
+            });
+        }
+    </script>
+
+    <style>
+        /* === THE STUDENT GRID THEME === */
+        :root {
+            --bg-color: #f8f9fa;
+            --header-bg: #ffffff;
+            --border-color: #dadce0;
+            --primary-blue: #1967d2;
+            --text-main: #3c4043;
+            --text-light: #5f6368;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+        }
+
+        /* HEADER */
+        header {
+            height: 64px;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            justify-content: space-between;
+            position: fixed;
+            width: 100%;
+            top: 0;
+            z-index: 100;
+            box-sizing: border-box;
+        }
+
+        .brand-container { display: flex; align-items: center; gap: 12px; }
+        
+        /* THE NODE LOGO STYLING */
+        .node-logo { stroke: var(--primary-blue); }
+        
+        .logo-text { font-size: 20px; font-weight: 500; color: var(--text-main); }
+        
+        #userAvatar img { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; }
+
+        /* LOGIN PAGE */
+        #loginInterface {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            margin-top: 64px;
+        }
+        #loginBtn {
+            background-color: var(--primary-blue);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        #loginBtn:hover { background-color: #174ea6; }
+
+        /* APP LAYOUT */
+        #appInterface {
+            display: none; /* Hidden until login */
+            margin-top: 64px;
+            height: calc(100vh - 64px);
+            display: flex;
+        }
+
+        /* SIDEBAR (DMs & Rooms) */
+        aside {
+            width: 260px;
+            background: white;
+            border-right: 1px solid var(--border-color);
+            padding: 20px;
+            display: none; /* Hidden on mobile */
+            flex-direction: column;
+        }
+        @media(min-width: 768px) { aside { display: flex; } }
+
+        .section-title {
+            font-size: 12px; font-weight: bold; color: var(--text-light);
+            text-transform: uppercase; margin-bottom: 12px; margin-top: 20px;
+        }
+        .section-title:first-child { margin-top: 0; }
+
+        .nav-item {
+            padding: 10px 15px;
+            border-radius: 0 20px 20px 0;
+            cursor: pointer;
+            color: var(--text-main);
+            display: flex; align-items: center; gap: 10px;
+            font-size: 14px; font-weight: 500;
+        }
+        .nav-item:hover { background: #f1f3f4; }
+        .nav-item.active { background: #e8f0fe; color: var(--primary-blue); }
+
+        /* CHAT AREA */
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: white;
+        }
+
+        #chat-box {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        /* MESSAGES */
+        .message-item { display: flex; gap: 12px; max-width: 80%; }
+        .message-item.me { align-self: flex-end; flex-direction: row-reverse; }
+
+        .avatar img { width: 32px; height: 32px; border-radius: 50%; }
+        
+        .msg-content {
+            padding: 10px 16px;
+            border-radius: 18px;
+            background: #f1f3f4;
+            color: var(--text-main);
+            position: relative;
+        }
+        .message-item.me .msg-content {
+            background: var(--primary-blue);
+            color: white;
+        }
+
+        .msg-header {
+            font-size: 11px;
+            margin-bottom: 4px;
+            font-weight: bold;
+            opacity: 0.7;
+        }
+        .message-item.me .msg-header { display: none; } /* Hide my name */
+
+        /* INPUT AREA */
+        .input-container {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 10px;
+            background: white;
+        }
+
+        input {
+            flex: 1;
+            padding: 12px 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            font-size: 15px;
+            outline: none;
+            background: #f8f9fa;
+        }
+        input:focus { background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+
+        button#sendBtn {
+            background: none; border: none;
+            color: var(--primary-blue);
+            font-size: 24px; cursor: pointer;
+            padding: 0 10px;
+        }
+
+        /* FOOTER */
+        footer {
+            text-align: center;
+            font-size: 11px;
+            color: #9aa0a6;
+            padding: 10px;
+            background: var(--bg-color);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand-container">
+            <svg class="node-logo" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+            </svg>
+            <div class="logo-text" id="brandName">Student Grid</div>
+        </div>
+        <div id="userAvatar"></div>
+    </header>
+
+    <div id="loginInterface">
+        <h2 style="color: #5f6368; margin-bottom: 10px;">Portal Access</h2>
+        <p style="color: #9aa0a6; margin-bottom: 30px; font-size: 14px;">Please verify your identity to continue.</p>
+        <button id="loginBtn">Sign in with Google</button>
+    </div>
+
+    <div id="appInterface">
+        <aside>
+            <div class="section-title">Grid Rooms</div>
+            <div class="nav-item active"><span>📢</span> Global Announcements</div>
+            <div class="nav-item"><span>⚛️</span> Physics Class</div>
+            <div class="nav-item"><span>📐</span> Math Study Group</div>
+            
+            <div class="section-title">Direct Link</div>
+            <div class="nav-item"><span>👤</span> Group Leader (Umar)</div>
+            
+            <div style="flex:1"></div>
+            <button id="logoutBtn" style="background:none; border:none; color:red; text-align:left; cursor:pointer; padding:10px;">Disconnect</button>
+        </aside>
+
+        <main>
+            <div id="chat-box">
+                </div>
+            <div class="input-container">
+                <input type="text" id="msgInput" placeholder="Type a message..." autocomplete="off">
+                <button id="sendBtn">➤</button>
+            </div>
+        </main>
+    </div>
+
+    <footer>Loading Footer...</footer>
+
+</body>
+</html>
