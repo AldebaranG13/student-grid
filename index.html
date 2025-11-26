@@ -8,16 +8,15 @@
     
     <script type="module">
         // ============================================
-        // 👮 ADMIN CONFIGURATION (ADD EMAILS HERE)
+        // 👮 ADMIN CONFIGURATION
         // ============================================
         const ADMIN_EMAILS = [
             "aldebaran.gibran@fiwa.sch.id", 
-            "teacher@school.edu",
             "aldebaran@example.com"
         ];
         // ============================================
 
-        const appConfig = { appName: "Student Grid", footerText: "© 2025 Node v5.0 (Admin)", themeColor: "#1967d2" };
+        const appConfig = { appName: "Student Grid", footerText: "© 2025 Node v5.1 (Stable)", themeColor: "#1967d2" };
 
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
@@ -50,7 +49,7 @@
             document.getElementById('brandName').innerText = appConfig.appName;
             document.querySelector('footer').innerText = appConfig.footerText;
             
-            document.getElementById('loginBtn').addEventListener('click', () => signInWithPopup(auth, provider).catch(console.error));
+            document.getElementById('loginBtn').addEventListener('click', () => signInWithPopup(auth, provider).catch(err => alert("Login Error: " + err.message)));
             document.getElementById('logoutBtn').addEventListener('click', () => { signOut(auth); document.title = "Student Grid | Login"; });
             
             document.getElementById('sendBtn').addEventListener('click', sendMessage);
@@ -63,7 +62,23 @@
             document.getElementById('tabCreate').addEventListener('click', () => switchTab('create'));
             document.getElementById('confirmJoinBtn').addEventListener('click', handleJoinRoom);
             document.getElementById('confirmCreateBtn').addEventListener('click', handleCreateRoom);
-            document.getElementById('closeProfileBtn').addEventListener('click', () => document.getElementById('profileCard').style.display = 'none');
+            
+            // PROFILE CLOSE LOGIC (Fixed)
+            document.getElementById('closeProfileBtn').addEventListener('click', () => {
+                document.getElementById('profileCard').style.display = 'none';
+            });
+            
+            // Close on click outside
+            document.addEventListener('click', (e) => {
+                const card = document.getElementById('profileCard');
+                if(card.style.display === 'block' && !card.contains(e.target) && !e.target.closest('.avatar-small')) {
+                    card.style.display = 'none';
+                }
+                const modal = document.getElementById('roomModal');
+                if(modal.style.display === 'flex' && e.target === modal) {
+                    closeModal('roomModal');
+                }
+            });
         });
 
         // --- AUTH & CHECK BLOCK STATUS ---
@@ -72,20 +87,22 @@
             const appUI = document.getElementById('appInterface');
             
             if (user) {
-                // 1. CHECK IF BLOCKED
-                const blockRef = doc(db, "blocked_users", user.uid);
-                const blockSnap = await getDoc(blockRef);
-                if (blockSnap.exists()) {
-                    const blockData = blockSnap.data();
-                    if (blockData.blockedUntil > Date.now()) {
-                        window.location.href = "blocked.html";
-                        return;
+                // Check if Blocked
+                try {
+                    const blockRef = doc(db, "blocked_users", user.uid);
+                    const blockSnap = await getDoc(blockRef);
+                    if (blockSnap.exists()) {
+                        const blockData = blockSnap.data();
+                        if (blockData.blockedUntil > Date.now()) {
+                            window.location.href = "blocked.html";
+                            return;
+                        }
                     }
-                }
+                } catch (e) { console.error("Block check failed", e); }
 
-                // 2. CHECK ADMIN STATUS
-                isAdmin = ADMIN_EMAILS.includes(user.email);
-                console.log("Admin Status:", isAdmin);
+                // Check Admin (Safe Mode)
+                const safeEmail = user.email || "";
+                isAdmin = ADMIN_EMAILS.includes(safeEmail);
 
                 loginUI.style.display = 'none';
                 appUI.style.display = 'flex';
@@ -127,7 +144,7 @@
                 snapshot.docChanges().forEach((change) => {
                     if (change.type === "added") {
                         const msg = change.doc.data();
-                        if(msg.uid === auth.currentUser.uid) return;
+                        if(auth.currentUser && msg.uid === auth.currentUser.uid) return;
                         if(msg.room === currentRoom) return;
                         handleUnread(msg.room);
                     }
@@ -184,7 +201,7 @@
             loadMessages(roomName);
         }
 
-        // --- ROOMS MANAGEMENT ---
+        // --- SIDEBAR MANAGEMENT ---
         function addToSidebar(listId, name, isDm, friendUid = null) {
             const list = document.getElementById(listId);
             const id = isDm ? name : name;
@@ -198,7 +215,6 @@
             let icon = '<span>#</span>';
             let allowDelete = true;
             
-            // GLOBAL UNREMOVABLE
             if(name === "Global") {
                 allowDelete = false;
                 icon = '<span>🌎</span>';
@@ -233,14 +249,13 @@
             list.appendChild(div);
         }
 
-        // --- MODAL & ROOM LOGIC ---
+        // --- MODAL LOGIC ---
         function openModal(id) { document.getElementById(id).style.display = 'flex'; }
         function closeModal(id) { document.getElementById(id).style.display = 'none'; }
         
         function switchTab(mode) {
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.getElementById(mode === 'join' ? 'tabJoin' : 'tabCreate').classList.add('active');
-            
             document.getElementById('viewJoin').style.display = mode === 'join' ? 'block' : 'none';
             document.getElementById('viewCreate').style.display = mode === 'create' ? 'block' : 'none';
         }
@@ -303,7 +318,7 @@
             localStorage.setItem(key, JSON.stringify(list));
         }
         function loadSavedRooms() {
-            addToSidebar('customRoomsList', 'Global', false); // Global First
+            addToSidebar('customRoomsList', 'Global', false); 
             let list = JSON.parse(localStorage.getItem('myRooms') || "[]");
             list.forEach(name => addToSidebar('customRoomsList', name, false));
         }
@@ -334,7 +349,6 @@
             });
         }
 
-        // CLICK TO OPEN PROFILE
         window.openProfile = function(uid) {
             const user = cachedUsers[uid] || { displayName: "Unknown", photoURL: "", joinedAt: null };
             const card = document.getElementById('profileCard');
@@ -345,12 +359,10 @@
             
             const isMe = auth.currentUser.uid === uid;
             
-            // Buttons
             document.getElementById('p-edit-btn').style.display = isMe ? 'block' : 'none';
             document.getElementById('p-dm-btn').style.display = !isMe ? 'block' : 'none';
             document.getElementById('p-block-btn').style.display = (isAdmin && !isMe) ? 'block' : 'none';
 
-            // Events
             document.getElementById('p-dm-btn').onclick = () => startDM(uid);
             document.getElementById('p-edit-btn').onclick = editMyNickname;
             document.getElementById('p-block-btn').onclick = () => blockUser(uid);
@@ -366,6 +378,7 @@
                 await saveUserToDB(user);
                 document.getElementById('p-name').innerText = newName;
                 document.getElementById('profileCard').style.display = 'none';
+                renderHeaderAvatar(user);
             }
         }
 
@@ -387,14 +400,16 @@
             const input = document.getElementById('msgInput');
             const text = input.value;
             const user = auth.currentUser;
-            if (!text.trim() || !user) return;
+            
+            if (!text.trim()) return;
+            if (!user) return alert("You are disconnected. Refresh!");
 
             try {
                 await addDoc(collection(db, "messages"), {
-                    text: text, uid: user.uid, displayName: user.displayName, email: user.email, photoURL: user.photoURL, room: currentRoom, createdAt: new Date().toISOString()
+                    text: text, uid: user.uid, displayName: user.displayName, email: user.email || "", photoURL: user.photoURL, room: currentRoom, createdAt: new Date().toISOString()
                 });
                 input.value = "";
-            } catch (e) { console.error(e); }
+            } catch (e) { alert("Send Failed: " + e.message); console.error(e); }
         };
 
         window.deleteMessage = async function(msgId) {
@@ -416,6 +431,7 @@
 
                 msgs.forEach((msg) => {
                     const isMe = auth.currentUser && msg.uid === auth.currentUser.uid;
+                    // Check if sender is admin based on their email in the message
                     const isSenderAdmin = ADMIN_EMAILS.includes(msg.email);
                     
                     if(msg.uid === "SYSTEM") {
@@ -623,6 +639,6 @@
             </div>
         </main>
     </div>
-    <footer>v5.0</footer>
+    <footer>v5.1</footer>
 </body>
 </html>
