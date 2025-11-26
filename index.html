@@ -7,11 +7,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     
     <script type="module">
-        const appConfig = { appName: "Student Grid", footerText: "© 2025 Node v3.2 (Stable)", themeColor: "#1967d2" };
+        const appConfig = { appName: "Student Grid", footerText: "© 2025 Node v3.5 (Local Storage)", themeColor: "#1967d2" };
 
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, setDoc, doc, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, setDoc, getDoc, doc, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
         // === 🔑 KEYS LOCKED IN ===
         const firebaseConfig = {
@@ -30,9 +30,10 @@
         const provider = new GoogleAuthProvider();
 
         let currentRoom = "Global";
-        let unsubscribe = null;     
+        let unsubscribe = null;
+        let cachedUsers = {}; 
 
-        // --- AUTH ---
+        // --- INIT ---
         document.addEventListener("DOMContentLoaded", () => {
             document.getElementById('brandName').innerText = appConfig.appName;
             document.querySelector('footer').innerText = appConfig.footerText;
@@ -42,8 +43,27 @@
             
             document.getElementById('sendBtn').addEventListener('click', sendMessage);
             document.getElementById('msgInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+            // "Join Room" - Saves to Local Storage (User Specified)
+            document.getElementById('createRoomBtn').addEventListener('click', () => {
+                const roomName = prompt("Enter Room Name to Join (e.g. 'Minecraft'):");
+                if(roomName && roomName.trim()) {
+                    const safeName = roomName.trim().replace(/ /g, "-");
+                    joinCustomRoom(safeName);
+                    switchRoom(safeName);
+                }
+            });
+
+            // Close profile on click outside
+            document.addEventListener('click', (e) => {
+                const card = document.getElementById('profileCard');
+                if(!card.contains(e.target) && !e.target.closest('.avatar-small') && !e.target.closest('.user-item')) {
+                    card.style.display = 'none';
+                }
+            });
         });
 
+        // --- AUTH STATE ---
         onAuthStateChanged(auth, async (user) => {
             const loginUI = document.getElementById('loginInterface');
             const appUI = document.getElementById('appInterface');
@@ -51,8 +71,12 @@
             if (user) {
                 loginUI.style.display = 'none';
                 appUI.style.display = 'flex';
-                renderAvatar(user);
+                renderHeaderAvatar(user);
                 await saveUserToDB(user);
+                
+                // Load the user's PERSONAL room list
+                loadSavedRooms();
+                
                 loadUserList();
                 switchRoom("Global"); 
             } else {
@@ -64,29 +88,110 @@
 
         async function saveUserToDB(user) {
             try {
-                await setDoc(doc(db, "users", user.uid), {
-                    displayName: user.displayName, photoURL: user.photoURL, uid: user.uid, lastSeen: new Date().toISOString()
-                }, { merge: true });
+                const userRef = doc(db, "users", user.uid);
+                const snap = await getDoc(userRef);
+                const data = { displayName: user.displayName, photoURL: user.photoURL, uid: user.uid, lastSeen: new Date().toISOString() };
+                if (!snap.exists()) data.joinedAt = new Date().toISOString();
+                await setDoc(userRef, data, { merge: true });
             } catch (e) { console.error(e); }
         }
 
-        function renderAvatar(user) {
+        function renderHeaderAvatar(user) {
             const imgTag = user.photoURL ? `<img src="${user.photoURL}">` : `<div class="letter-avatar">${user.displayName.charAt(0)}</div>`;
-            const av = document.getElementById('userAvatar');
-            av.innerHTML = imgTag;
-            av.onclick = async () => {
-                const newName = prompt("Edit Display Name:", user.displayName);
-                if (newName && newName.trim()) {
-                    await updateProfile(user, { displayName: newName });
-                    await saveUserToDB(user);
-                    renderAvatar(user);
-                }
-            };
+            document.getElementById('userAvatar').innerHTML = imgTag;
         }
 
-        // --- NAVIGATION ---
+        // --- PROFILE POPUP LOGIC ---
+        window.showProfile = function(event, uid) {
+            event.stopPropagation();
+            const user = cachedUsers[uid] || { displayName: "Loading...", photoURL: "", joinedAt: null };
+            
+            const card = document.getElementById('profileCard');
+            const isMe = auth.currentUser && auth.currentUser.uid === uid;
+            
+            const dateStr = user.joinedAt ? new Date(user.joinedAt).toLocaleDateString() : "Unknown";
+            document.getElementById('p-img').src = user.photoURL || "https://via.placeholder.com/40";
+            document.getElementById('p-name').innerText = user.displayName;
+            document.getElementById('p-joined').innerText = `Joined: ${dateStr}`;
+            
+            const editBtn = document.getElementById('p-edit-btn');
+            editBtn.style.display = isMe ? 'block' : 'none';
+            if(isMe) editBtn.onclick = () => editMyNickname();
+
+            // Position calculation
+            const rect = event.target.getBoundingClientRect();
+            card.style.display = 'block';
+            card.style.left = `${rect.right + 10}px`;
+            card.style.top = `${rect.top}px`;
+            
+            // Adjust if too low
+            if (event.clientY > window.innerHeight - 200) card.style.top = `${event.clientY - 150}px`;
+        }
+
+        async function editMyNickname() {
+            const user = auth.currentUser;
+            const newName = prompt("New Nickname:", user.displayName);
+            if (newName && newName.trim()) {
+                await updateProfile(user, { displayName: newName });
+                await saveUserToDB(user);
+                document.getElementById('p-name').innerText = newName;
+                document.getElementById('profileCard').style.display = 'none';
+                renderHeaderAvatar(user);
+            }
+        }
+
+        // --- ROOMS (LOCAL STORAGE) ---
+        
+        function joinCustomRoom(name) {
+            createRoomButton(name, false);
+            // Save to LocalStorage (Your Device Only)
+            let savedRooms = JSON.parse(localStorage.getItem('myRooms') || "[]");
+            if(!savedRooms.includes(name)) {
+                savedRooms.push(name);
+                localStorage.setItem('myRooms', JSON.stringify(savedRooms));
+            }
+        }
+
+        function loadSavedRooms() {
+            let savedRooms = JSON.parse(localStorage.getItem('myRooms') || "[]");
+            savedRooms.forEach(name => createRoomButton(name, false));
+        }
+
+        function createRoomButton(name, isActive) {
+            const list = document.getElementById('customRoomsList');
+            // Avoid duplicates
+            if(Array.from(list.children).some(c => c.innerText.includes(name))) return;
+
+            const div = document.createElement('div');
+            div.className = `nav-item ${isActive ? 'active' : ''}`;
+            div.innerHTML = `<span>#</span> ${name}`;
+            div.onclick = () => switchRoom(name);
+            
+            // Delete 'x' button
+            const del = document.createElement('span');
+            del.innerText = '×';
+            del.className = 'delete-room';
+            del.onclick = (e) => {
+                e.stopPropagation();
+                leaveRoom(name, div);
+            };
+            
+            div.appendChild(del);
+            list.appendChild(div);
+        }
+
+        function leaveRoom(name, element) {
+            if(confirm(`Remove #${name} from your list?`)) {
+                element.remove();
+                let savedRooms = JSON.parse(localStorage.getItem('myRooms') || "[]");
+                savedRooms = savedRooms.filter(r => r !== name);
+                localStorage.setItem('myRooms', JSON.stringify(savedRooms));
+                switchRoom('Global');
+            }
+        }
+
         window.startDM = function(targetUid, targetName) {
-            if(targetUid === auth.currentUser.uid) return alert("You cannot DM yourself.");
+            if(targetUid === auth.currentUser.uid) return alert("That is you.");
             const dmRoomId = [auth.currentUser.uid, targetUid].sort().join("_");
             switchRoom(dmRoomId, `🔒 ${targetName}`);
         }
@@ -95,21 +200,31 @@
             currentRoom = roomName;
             document.getElementById('roomTitle').innerText = displayTitle || `# ${roomName}`;
             document.title = `Grid | ${displayTitle || roomName}`;
+            
             document.querySelectorAll('.nav-item, .user-item').forEach(el => el.classList.remove('active'));
+            const items = document.querySelectorAll('.nav-item');
+            items.forEach(el => {
+                if(el.innerText.includes(roomName)) el.classList.add('active');
+            });
+
             loadMessages(roomName);
         }
 
+        // --- USER LIST ---
         function loadUserList() {
             onSnapshot(query(collection(db, "users")), (snapshot) => {
                 const list = document.getElementById('userList');
                 list.innerHTML = '';
                 snapshot.forEach((doc) => {
                     const u = doc.data();
+                    cachedUsers[u.uid] = u; 
                     if(u.uid === auth.currentUser.uid) return;
+                    
                     const div = document.createElement('div');
                     div.className = 'user-item';
-                    div.innerHTML = `<span class="status-dot">●</span> ${u.displayName.split(' ')[0]}`;
+                    div.onmouseenter = (e) => showProfile(e, u.uid);
                     div.onclick = () => startDM(u.uid, u.displayName.split(' ')[0]);
+                    div.innerHTML = `<span class="status-dot">●</span> ${u.displayName.split(' ')[0]}`;
                     list.appendChild(div);
                 });
             });
@@ -137,22 +252,29 @@
 
             unsubscribe = onSnapshot(query(collection(db, "messages"), where("room", "==", room)), (snapshot) => {
                 box.innerHTML = ''; 
-                if(snapshot.empty) { box.innerHTML = '<div class="loading">No messages yet.</div>'; return; }
+                if(snapshot.empty) { box.innerHTML = '<div class="loading">Room is empty. Be the first!</div>'; return; }
 
                 let msgs = [];
                 snapshot.forEach(doc => msgs.push(doc.data()));
                 msgs.sort((a, b) => (a.createdAt > b.createdAt) ? 1 : -1);
 
                 msgs.forEach((msg) => {
+                    // Update cache if missing
+                    if(!cachedUsers[msg.uid]) cachedUsers[msg.uid] = { displayName: msg.displayName, photoURL: msg.photoURL, joinedAt: null };
+
                     const isMe = auth.currentUser && msg.uid === auth.currentUser.uid;
                     const div = document.createElement('div');
                     div.className = `message-item ${isMe ? 'me' : ''}`;
-                    const safeName = msg.displayName ? msg.displayName.split(' ')[0] : "User";
-                    const click = isMe ? '' : `onclick="startDM('${msg.uid}', '${safeName}')" style="cursor:pointer"`;
-
+                    const safeName = msg.displayName || "Unknown";
+                    
                     div.innerHTML = `
-                        <div class="avatar-small" ${click}><img src="${msg.photoURL}" onerror="this.style.display='none'"></div>
-                        <div class="msg-content"><div class="msg-header">${safeName}</div><div class="msg-text">${msg.text}</div></div>
+                        <div class="avatar-small" onmouseenter="showProfile(event, '${msg.uid}')">
+                            <img src="${msg.photoURL}" onerror="this.style.display='none'">
+                        </div>
+                        <div class="msg-content">
+                            <div class="msg-header">${safeName}</div>
+                            <div class="msg-text">${msg.text}</div>
+                        </div>
                     `;
                     box.appendChild(div);
                 });
@@ -165,26 +287,49 @@
         :root { --bg: #f8f9fa; --white: #ffffff; --border: #dadce0; --blue: #1967d2; --text: #3c4043; --gray: #5f6368; }
         body { font-family: 'Roboto', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
         
-        header { height: 64px; background: var(--white); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; justify-content: space-between; }
+        /* HEADER */
+        header { height: 64px; background: var(--white); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; justify-content: space-between; position: relative; z-index: 10; }
         .brand { display: flex; align-items: center; gap: 12px; }
         .logo-text { font-size: 20px; font-weight: 500; }
         #userAvatar img { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
         #userAvatar img:hover { border-color: var(--blue); }
 
+        /* PROFILE CARD */
+        #profileCard {
+            display: none; position: fixed; background: white; width: 220px; padding: 15px;
+            border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 9999; border: 1px solid var(--border);
+        }
+        .p-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .p-header img { width: 45px; height: 45px; border-radius: 50%; }
+        .p-info h4 { margin: 0; font-size: 15px; color: var(--text); }
+        .p-info span { font-size: 11px; color: var(--gray); }
+        #p-edit-btn { margin-top: 10px; width: 100%; padding: 6px; background: #e8f0fe; border: none; color: var(--blue); cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: 500; }
+
+        /* LOGIN */
         #loginInterface { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
         #loginBtn { background: var(--blue); color: white; border: none; padding: 12px 30px; border-radius: 4px; cursor: pointer; font-size: 16px; }
 
+        /* APP */
         #appInterface { display: none; height: calc(100vh - 65px); display: flex; }
         aside { width: 260px; background: var(--white); border-right: 1px solid var(--border); padding: 20px; display: none; flex-direction: column; overflow-y: auto; }
         @media(min-width: 768px) { aside { display: flex; } }
 
         .section-header { font-size: 11px; font-weight: bold; color: var(--gray); text-transform: uppercase; margin: 20px 0 10px; letter-spacing: 0.5px; }
         .section-header:first-child { margin-top: 0; }
+        
         .nav-item, .user-item { padding: 8px 12px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 2px; }
         .nav-item:hover, .user-item:hover { background: #f1f3f4; }
         .active { background: #e8f0fe; color: var(--blue); font-weight: 500; }
+        
+        .delete-room { margin-left: auto; color: #ccc; font-size: 14px; font-weight: bold; }
+        .delete-room:hover { color: red; }
+
+        #createRoomBtn { margin-top: 5px; color: var(--blue); cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 5px; padding: 8px 12px; font-weight: 500; }
+        #createRoomBtn:hover { background: #f1f3f4; border-radius: 4px; }
+
         .status-dot { color: #1e8e3e; font-size: 10px; }
 
+        /* CHAT */
         main { flex: 1; display: flex; flex-direction: column; background: var(--white); }
         #room-header { padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 500; font-size: 16px; }
         #chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
@@ -193,11 +338,15 @@
         .message-item { display: flex; gap: 10px; max-width: 75%; animation: fadeIn 0.2s; }
         .message-item.me { align-self: flex-end; flex-direction: row-reverse; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        .avatar-small img { width: 32px; height: 32px; border-radius: 50%; }
+        
+        .avatar-small img { width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+        
         .msg-content { padding: 10px 14px; border-radius: 18px; background: #f1f3f4; font-size: 14px; line-height: 1.4; }
         .message-item.me .msg-content { background: var(--blue); color: white; }
-        .msg-header { font-size: 11px; margin-bottom: 4px; font-weight: bold; color: var(--gray); }
-        .message-item.me .msg-header { display: none; }
+        
+        /* Sender Name */
+        .msg-header { font-size: 12px; margin-bottom: 4px; font-weight: 700; color: #333; }
+        .message-item.me .msg-header { display: none; } /* Hide 'me' name */
         
         .input-container { padding: 15px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
         input { flex: 1; padding: 12px 20px; border: 1px solid var(--border); border-radius: 24px; outline: none; background: #f8f9fa; }
@@ -207,6 +356,17 @@
     </style>
 </head>
 <body>
+    <div id="profileCard">
+        <div class="p-header">
+            <img id="p-img" src="" alt="User">
+            <div class="p-info">
+                <h4 id="p-name">Name</h4>
+                <span id="p-joined">Joined: ...</span>
+            </div>
+        </div>
+        <button id="p-edit-btn">Edit Nickname</button>
+    </div>
+
     <header>
         <div class="brand">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1967d2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -215,7 +375,7 @@
             </svg>
             <div class="logo-text" id="brandName">Student Grid</div>
         </div>
-        <div id="userAvatar" title="Click to edit username"></div>
+        <div id="userAvatar"></div>
     </header>
 
     <div id="loginInterface">
@@ -227,8 +387,8 @@
         <aside>
             <div class="section-header">Grid Rooms</div>
             <div class="nav-item active" onclick="switchRoom('Global')"><span>📢</span> Global</div>
-            <div class="nav-item" onclick="switchRoom('Physics-7B')"><span>⚛️</span> Physics 7B</div>
-            <div class="nav-item" onclick="switchRoom('Gaming')"><span>🎮</span> Gaming</div>
+            <div id="customRoomsList"></div>
+            <div id="createRoomBtn"><span>+</span> Join / Create Room</div>
 
             <div class="section-header">Classmates</div>
             <div id="userList"><div style="padding:10px; font-size:12px; color:#999;">Waiting for users...</div></div>
