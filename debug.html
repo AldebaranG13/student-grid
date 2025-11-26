@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Student Grid | DEBUG MODE</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; text-align: center; }
+        #error-log { 
+            background: #ffebeb; color: #d8000c; border: 1px solid #d8000c; 
+            padding: 10px; margin: 20px auto; width: 80%; text-align: left; 
+            font-family: monospace; display: none;
+        }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    </style>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // YOUR KEYS
+        const firebaseConfig = {
+            apiKey: "AIzaSyDb0JiAH1fFBbcLfF8pmteX2U7ViBkAfqE",
+            authDomain: "student-grid.firebaseapp.com",
+            projectId: "student-grid",
+            storageBucket: "student-grid.firebasestorage.app",
+            messagingSenderId: "34314858632",
+            appId: "1:34314858632:web:ce99f6b7e90d27a7f22f3d",
+            measurementId: "G-XVHGMWKVDD"
+        };
+
+        const logError = (msg) => {
+            const box = document.getElementById('error-log');
+            box.style.display = 'block';
+            box.innerHTML += `> ${msg}<br>`;
+        }
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const provider = new GoogleAuthProvider();
+
+            document.getElementById('loginBtn').addEventListener('click', () => {
+                logError("Attempting login...");
+                signInWithPopup(auth, provider)
+                    .then((result) => {
+                        alert("SUCCESS! You are logged in as: " + result.user.displayName);
+                    })
+                    .catch((error) => {
+                        logError("LOGIN FAILED:");
+                        logError("Code: " + error.code);
+                        logError("Message: " + error.message);
+                        if(error.code === 'auth/unauthorized-domain') {
+                            logError("FIX: Go to Firebase Console -> Auth -> Settings -> Add Domain");
+                        }
+                    });
+            });
+        } catch (e) {
+            logError("SETUP ERROR: " + e.message);
+        }
+    </script>
+</head>
+<body>
+    <h1>🐞 Debug Mode</h1>
+    <p>Click Login. If it fails, read the red box below.</p>
+    <button id="loginBtn">Test Login</button>
+    <div id="error-log"></div>
+</body>
+</html>

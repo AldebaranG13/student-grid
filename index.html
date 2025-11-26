@@ -2,21 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Student Grid | DEBUG MODE</title>
-    <style>
-        body { font-family: sans-serif; padding: 20px; text-align: center; }
-        #error-log { 
-            background: #ffebeb; color: #d8000c; border: 1px solid #d8000c; 
-            padding: 10px; margin: 20px auto; width: 80%; text-align: left; 
-            font-family: monospace; display: none;
-        }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Grid | Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        // === ⚙️ CONFIGURATION ===
+        const appConfig = {
+            appName: "Student Grid",
+            footerText: "© 2025 Open Student Network • Node v3.1 (Stable)",
+            themeColor: "#1967d2" 
+        };
 
-        // YOUR KEYS
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, setDoc, doc, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // ===========================================================
+        // 🔑 KEYS LOCKED IN (CONFIRMED WORKING)
+        // ===========================================================
         const firebaseConfig = {
             apiKey: "AIzaSyDb0JiAH1fFBbcLfF8pmteX2U7ViBkAfqE",
             authDomain: "student-grid.firebaseapp.com",
@@ -26,42 +30,74 @@
             appId: "1:34314858632:web:ce99f6b7e90d27a7f22f3d",
             measurementId: "G-XVHGMWKVDD"
         };
+        // ===========================================================
 
-        const logError = (msg) => {
-            const box = document.getElementById('error-log');
-            box.style.display = 'block';
-            box.innerHTML += `> ${msg}<br>`;
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+
+        let currentRoom = "Global";
+        let unsubscribe = null;     
+
+        // DOM Elements
+        const loginBtn = document.getElementById('loginBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const appInterface = document.getElementById('appInterface');
+        const loginInterface = document.getElementById('loginInterface');
+        const msgInput = document.getElementById('msgInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const chatBox = document.getElementById('chat-box');
+        const brandName = document.getElementById('brandName');
+        const userAvatar = document.getElementById('userAvatar');
+        const roomTitle = document.getElementById('roomTitle');
+        const userList = document.getElementById('userList');
+
+        brandName.innerText = appConfig.appName;
+        document.querySelector('footer').innerText = appConfig.footerText;
+
+        // --- AUTHENTICATION ---
+        loginBtn.addEventListener('click', () => signInWithPopup(auth, provider).catch(console.error));
+        logoutBtn.addEventListener('click', () => { signOut(auth); document.title = "Student Grid | Login"; });
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                loginInterface.style.display = 'none';
+                appInterface.style.display = 'flex';
+                renderAvatar(user);
+                await saveUserToDB(user);
+                loadUserList();
+                switchRoom("Global"); 
+            } else {
+                loginInterface.style.display = 'flex';
+                appInterface.style.display = 'none';
+                userAvatar.innerHTML = '';
+            }
+        });
+
+        async function saveUserToDB(user) {
+            try {
+                await setDoc(doc(db, "users", user.uid), {
+                    displayName: user.displayName,
+                    photoURL: user.photoURL,
+                    uid: user.uid,
+                    lastSeen: new Date().toISOString()
+                }, { merge: true });
+            } catch (e) { console.error(e); }
         }
 
-        try {
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const provider = new GoogleAuthProvider();
-
-            document.getElementById('loginBtn').addEventListener('click', () => {
-                logError("Attempting login...");
-                signInWithPopup(auth, provider)
-                    .then((result) => {
-                        alert("SUCCESS! You are logged in as: " + result.user.displayName);
-                    })
-                    .catch((error) => {
-                        logError("LOGIN FAILED:");
-                        logError("Code: " + error.code);
-                        logError("Message: " + error.message);
-                        if(error.code === 'auth/unauthorized-domain') {
-                            logError("FIX: Go to Firebase Console -> Auth -> Settings -> Add Domain");
-                        }
-                    });
-            });
-        } catch (e) {
-            logError("SETUP ERROR: " + e.message);
+        function renderAvatar(user) {
+            const imgTag = user.photoURL ? `<img src="${user.photoURL}">` : `<div class="letter-avatar">${user.displayName.charAt(0)}</div>`;
+            userAvatar.innerHTML = imgTag;
+            userAvatar.onclick = changeUsername;
         }
-    </script>
-</head>
-<body>
-    <h1>🐞 Debug Mode</h1>
-    <p>Click Login. If it fails, read the red box below.</p>
-    <button id="loginBtn">Test Login</button>
-    <div id="error-log"></div>
-</body>
-</html>
+
+        async function changeUsername() {
+            const user = auth.currentUser;
+            const newName = prompt("Edit your Display Name:", user.displayName);
+            if (newName && newName.trim() !== "") {
+                try {
+                    await updateProfile(user, { displayName: newName });
+                    await saveUserToDB(user);
+                    renderAvatar(user);
+                } catch
