@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Grid | Maintenance</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        .container { border: 1px solid #30363d; padding: 40px; border-radius: 6px; background: #161b22; }
+        h1 { color: #ff7b72; margin-bottom: 10px; }
+        p { color: #8b949e; }
+        .blink { animation: blinker 1s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Sorry for the Inconvenience🙇</h1>
+        <p>The Student Grid is currently undergoing maintenance.</p>
+        <p style="margin-top: 20px;">Error Code: <span style="color:#7ee787">ERR_SERVER_MAINTENANCE</span></p>
+        <p class="blink">_</p>
+    </div>
+</body>
+</html>
