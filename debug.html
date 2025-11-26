@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Grid | Debug</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <script type="module">
+        // === 👮 ADMINS ===
+        const ADMIN_EMAILS = ["aldebaran.gibran@fiwa.sch.id", "your.email@gmail.com"];
+        
+        const appConfig = { appName: "Student Grid", footerText: "© 2025 v5.4 (Debug Mode)", themeColor: "#1967d2" };
+
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, setDoc, getDoc, deleteDoc, doc, query, where, orderBy, onSnapshot, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // === 🔑 KEYS ===
+        const firebaseConfig = {
+            apiKey: "AIzaSyDb0JiAH1fFBbcLfF8pmteX2U7ViBkAfqE",
+            authDomain: "student-grid.firebaseapp.com",
+            projectId: "student-grid",
+            storageBucket: "student-grid.firebasestorage.app",
+            messagingSenderId: "34314858632",
+            appId: "1:34314858632:web:ce99f6b7e90d27a7f22f3d",
+            measurementId: "G-XVHGMWKVDD"
+        };
+
+        // === 🖨️ ON-SCREEN LOGGER (So you can see errors) ===
+        function log(msg, type="info") {
+            const box = document.getElementById('debug-console');
+            if(box) {
+                const line = document.createElement('div');
+                line.style.color = type === 'error' ? '#ff4d4d' : '#00ff00';
+                line.innerText = `> ${msg}`;
+                box.appendChild(line);
+                box.scrollTop = box.scrollHeight;
+            }
+            if(type === 'error') console.error(msg); else console.log(msg);
+        }
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            const provider = new GoogleAuthProvider();
+            let currentRoom = "Global";
+            let unsubscribeChat = null;
+            let cachedUsers = {}; 
+            let unreadCounts = {};
+            let isAdmin = false;
+
+            document.addEventListener("DOMContentLoaded", () => {
+                log("System Initialized. Waiting for User...");
+                document.getElementById('brandName').innerText = appConfig.appName;
+                
+                document.getElementById('loginBtn').addEventListener('click', () => {
+                    log("Attempting Google Login...");
+                    signInWithPopup(auth, provider).catch(err => log("LOGIN ERROR: " + err.message, "error"));
+                });
+
+                document.getElementById('sendBtn').addEventListener('click', sendMessage);
+                document.getElementById('msgInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+                // UI Handlers
+                document.getElementById('openRoomModalBtn').addEventListener('click', () => document.getElementById('roomModal').style.display = 'flex');
+                document.getElementById('closeModalBtn').addEventListener('click', () => document.getElementById('roomModal').style.display = 'none');
+                document.getElementById('tabJoin').addEventListener('click', () => switchTab('join'));
+                document.getElementById('tabCreate').addEventListener('click', () => switchTab('create'));
+                document.getElementById('confirmJoinBtn').addEventListener('click', handleJoinRoom);
+                document.getElementById('confirmCreateBtn').addEventListener('click', handleCreateRoom);
+                document.getElementById('closeProfileBtn').addEventListener('click', () => document.getElementById('profileCard').style.display = 'none');
+                
+                document.getElementById('p-logout-btn').addEventListener('click', () => {
+                    if(confirm("Log out?")) signOut(auth).then(() => window.location.reload());
+                });
+            });
+
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    log(`Logged in as: ${user.email}`);
+                    document.getElementById('loginInterface').style.display = 'none';
+                    document.getElementById('appInterface').style.display = 'flex';
+                    
+                    // Admin Check
+                    isAdmin = ADMIN_EMAILS.includes(user.email);
+                    if(isAdmin) log("Admin Privileges: ACTIVE");
+
+                    // Setup
+                    renderHeaderAvatar(user);
+                    saveUserToDB(user); // Fire and forget
+                    loadSavedRooms();
+                    loadSavedDMs();
+                    cacheAllUsers();
+                    switchRoom("Global"); 
+                } else {
+                    document.getElementById('loginInterface').style.display = 'flex';
+                    document.getElementById('appInterface').style.display = 'none';
+                }
+            });
+
+            // --- CORE FUNCTIONS ---
+
+            async function saveUserToDB(user) {
+                try {
+                    await setDoc(doc(db, "users", user.uid), {
+                        displayName: user.displayName, email: user.email, photoURL: user.photoURL, uid: user.uid, lastSeen: new Date().toISOString()
+                    }, { merge: true });
+                } catch (e) { log("DB Error (User Save): " + e.message, "error"); }
+            }
+
+            function renderHeaderAvatar(user) {
+                const imgTag = user.photoURL ? `<img src="${user.photoURL}">` : `<div class="letter-avatar">${user.displayName.charAt(0)}</div>`;
+                document.getElementById('userAvatar').innerHTML = imgTag;
+            }
+
+            window.switchRoom = function(roomName) {
+                currentRoom = roomName;
+                document.getElementById('roomTitle').innerText = roomName.startsWith("dm_") ? "Private Chat" : `# ${roomName}`;
+                document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+                const item = document.getElementById(`nav-${roomName}`);
+                if(item) item.classList.add('active');
+                
+                log(`Switched to room: ${roomName}`);
+                loadMessages(roomName);
+            }
+
+            const sendMessage = async () => {
+                const input = document.getElementById('msgInput');
+                const text = input.value;
+                const user = auth.currentUser;
+                
+                if (!text.trim()) return;
+                if (!user) return log("Error: Not logged in!", "error");
+
+                log(`Sending: "${text}"...`);
+
+                try {
+                    await addDoc(collection(db, "messages"), {
+                        text: text, 
+                        uid: user.uid, 
+                        displayName: user.displayName || "Unknown", 
+                        email: user.email || "", 
+                        photoURL: user.photoURL || "", 
+                        room: currentRoom, 
+                        createdAt: new Date().toISOString()
+                    });
+                    input.value = "";
+                    log("Message Sent!", "info");
+                } catch (e) { 
+                    log("SEND FAILED: " + e.message, "error");
+                    alert("Message Failed: " + e.message + "\n\n(Check the black box below for details)");
+                }
+            };
+
+            function loadMessages(room) {
+                if (unsubscribeChat) unsubscribeChat();
+                const box = document.getElementById('chat-box');
+                box.innerHTML = '<div class="loading">Loading messages...</div>';
+
+                // CRASH PROTECTION: Try-Catch around the snapshot listener
+                try {
+                    const q = query(collection(db, "messages"), where("room", "==", room));
+                    
+                    unsubscribeChat = onSnapshot(q, (snapshot) => {
+                        box.innerHTML = ''; 
+                        let msgs = [];
+                        snapshot.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
+                        
+                        // Safe Sort
+                        msgs.sort((a, b) => (a.createdAt || "") > (b.createdAt || "") ? 1 : -1);
+
+                        msgs.forEach((msg) => {
+                            const isMe = auth.currentUser && msg.uid === auth.currentUser.uid;
+                            const safeEmail = msg.email || "";
+                            const isSenderAdmin = ADMIN_EMAILS.includes(safeEmail);
+                            
+                            // System Msg
+                            if(msg.uid === "SYSTEM") {
+                                const div = document.createElement('div');
+                                div.className = "system-msg";
+                                div.innerHTML = `🛡️ <b>${msg.displayName}</b>: ${msg.text}`;
+                                box.appendChild(div);
+                                return;
+                            }
+
+                            const div = document.createElement('div');
+                            div.className = `message-item ${isMe ? 'me' : ''}`;
+                            
+                            let adminBadge = isSenderAdmin ? '<span class="admin-tag">[ADMIN]</span>' : '';
+                            let deleteBtn = isAdmin ? `<span class="trash-btn" onclick="deleteMessage('${msg.id}')">🗑️</span>` : '';
+
+                            div.innerHTML = `
+                                <div class="avatar-small" onclick="openProfile('${msg.uid}')">
+                                    <img src="${msg.photoURL || ''}" onerror="this.style.display='none'">
+                                </div>
+                                <div class="msg-content">
+                                    <div class="msg-header">${msg.displayName} ${adminBadge} ${deleteBtn}</div>
+                                    <div class="msg-text">${msg.text}</div>
+                                </div>
+                            `;
+                            box.appendChild(div);
+                        });
+                        box.scrollTop = box.scrollHeight;
+                    }, (error) => {
+                        log("LOAD ERROR: " + error.message, "error");
+                        if(error.message.includes("requires an index")) {
+                            box.innerHTML = `<div style="color:red; padding:20px;">⚠️ INDEX MISSING: Check Console (Ctrl+Shift+J)</div>`;
+                        }
+                    });
+                } catch(e) {
+                    log("CRITICAL QUERY ERROR: " + e.message, "error");
+                }
+            }
+
+            // --- HELPERS ---
+            window.deleteMessage = async function(msgId) {
+                if(confirm("Delete?")) await deleteDoc(doc(db, "messages", msgId));
+            }
+
+            // Simplified Profile/Modal/Sidebar logic for stability
+            window.openProfile = function(uid) {
+                const user = cachedUsers[uid] || { displayName: "User", photoURL: "" };
+                const card = document.getElementById('profileCard');
+                document.getElementById('p-name').innerText = user.displayName;
+                document.getElementById('p-img').src = user.photoURL;
+                card.style.display = 'block';
+                
+                const isMe = auth.currentUser.uid === uid;
+                document.getElementById('p-logout-btn').style.display = isMe ? 'block' : 'none';
+            }
+
+            function addToSidebar(listId, name, isDm) {
+                const list = document.getElementById(listId);
+                if(document.getElementById(`nav-${name}`)) return;
+                const div = document.createElement('div');
+                div.id = `nav-${name}`;
+                div.className = 'nav-item';
+                div.innerHTML = isDm ? `● Chat` : `# ${name}`;
+                div.onclick = () => switchRoom(name);
+                list.appendChild(div);
+            }
+
+            function loadSavedRooms() {
+                addToSidebar('customRoomsList', 'Global', false); 
+            }
+            function loadSavedDMs() { /* simplified for debug */ }
+            function cacheAllUsers() { 
+                onSnapshot(collection(db, "users"), snap => {
+                    snap.forEach(d => cachedUsers[d.id] = d.data());
+                });
+            }
+            
+            // Modal logic
+            function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+            function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+            function switchTab(t) {
+                document.getElementById('viewJoin').style.display = t==='join'?'block':'none';
+                document.getElementById('viewCreate').style.display = t==='create'?'block':'none';
+            }
+            async function handleCreateRoom() {
+                const name = document.getElementById('inputCreateName').value.replace(/ /g, "-");
+                if(name) {
+                    const roomId = `${name}-${Math.floor(Math.random()*999)}`;
+                    addToSidebar('customRoomsList', roomId, false);
+                    switchRoom(roomId);
+                    closeModal('roomModal');
+                }
+            }
+            function handleJoinRoom() {
+                const id = document.getElementById('inputJoinId').value;
+                if(id) { addToSidebar('customRoomsList', id, false); switchRoom(id); closeModal('roomModal'); }
+            }
+
+        } catch (err) {
+            document.body.innerHTML = `<h1 style="color:red">CRITICAL STARTUP ERROR</h1><p>${err.message}</p>`;
+        }
+    </script>
+
+    <style>
+        :root { --bg: #f2f3f5; --white: #ffffff; --sidebar: #e3e5e8; --blue: #5865F2; --text: #2e3338; }
+        body { font-family: 'Roboto', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--white); color: var(--text); }
+        
+        /* DEBUG CONSOLE */
+        #debug-console {
+            height: 100px; background: #000; color: #00ff00; font-family: monospace; font-size: 12px; 
+            overflow-y: auto; padding: 10px; border-top: 2px solid #333;
+        }
+
+        .admin-tag { font-size: 10px; font-weight: 900; color: red; margin-left: 5px; }
+        header { height: 50px; border-bottom: 1px solid #ddd; display: flex; align-items: center; padding: 0 20px; justify-content: space-between; }
+        .brand { font-weight: 700; color: var(--blue); }
+        #userAvatar img { width: 32px; height: 32px; border-radius: 50%; }
+
+        #appInterface { display: none; flex: 1; display: flex; overflow: hidden; } /* Flex 1 to take space */
+        aside { width: 240px; background: var(--sidebar); display: flex; flex-direction: column; padding: 10px; }
+        .nav-item { padding: 8px; cursor: pointer; } .nav-item:hover { background: #d4d7dc; } .nav-item.active { font-weight: bold; }
+        
+        main { flex: 1; display: flex; flex-direction: column; }
+        #room-header { height: 50px; border-bottom: 1px solid #ddd; display: flex; align-items: center; padding: 0 20px; font-weight: bold; }
+        #chat-box { flex: 1; padding: 20px; overflow-y: auto; }
+        .message-item { display: flex; gap: 10px; margin-bottom: 10px; }
+        .avatar-small img { width: 40px; height: 40px; border-radius: 50%; }
+        .msg-header { font-weight: bold; font-size: 14px; }
+        .msg-text { font-size: 15px; }
+        
+        .input-container { padding: 15px; background: #ebedef; display: flex; gap: 10px; }
+        input { flex: 1; padding: 10px; border: none; border-radius: 4px; }
+        button#sendBtn { border: none; background: var(--blue); color: white; padding: 0 20px; border-radius: 4px; cursor: pointer; }
+
+        /* POPUPS */
+        #profileCard, #roomModal { display: none; position: fixed; background: white; border: 1px solid #ccc; box-shadow: 0 5px 15px rgba(0,0,0,0.2); z-index: 1000; }
+        #profileCard { top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 20px; width: 200px; text-align: center; border-radius: 8px; }
+        #profileCard img { width: 80px; height: 80px; border-radius: 50%; }
+        #roomModal { top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
+        .modal-content { background: white; padding: 20px; width: 300px; border-radius: 8px; }
+        .p-btn { display: block; width: 100%; margin-top: 10px; padding: 8px; cursor: pointer; }
+        #p-logout-btn { background: red; color: white; border: none; }
+        
+        #loginInterface { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #loginBtn { background: var(--blue); color: white; padding: 15px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand"><span id="brandName">Grid</span></div>
+        <div id="userAvatar"></div>
+    </header>
+
+    <div id="loginInterface">
+        <h2>Welcome</h2>
+        <button id="loginBtn">Login</button>
+    </div>
+
+    <div id="appInterface" style="display:none;"> <aside>
+            <div id="customRoomsList"></div>
+            <div id="openRoomModalBtn" style="margin-top:10px; color:blue; cursor:pointer;">+ Join Room</div>
+            <div id="dmList" style="margin-top:20px;"></div>
+        </aside>
+        <main>
+            <div id="room-header"><span id="roomTitle"># Global</span></div>
+            <div id="chat-box"></div>
+            <div class="input-container">
+                <input type="text" id="msgInput" placeholder="Message..." autocomplete="off">
+                <button id="sendBtn">Send</button>
+            </div>
+        </main>
+    </div>
+
+    <div id="profileCard">
+        <span id="closeProfileBtn" style="float:right; cursor:pointer;">X</span>
+        <img id="p-img" src="">
+        <h4 id="p-name">User</h4>
+        <button id="p-logout-btn" class="p-btn">Log Out</button>
+    </div>
+
+    <div id="roomModal">
+        <div class="modal-content">
+            <div style="margin-bottom:10px;">
+                <button id="tabJoin">Join</button> <button id="tabCreate">Create</button>
+            </div>
+            <div id="viewJoin">
+                <input id="inputJoinId" placeholder="Room ID" style="width:100%; padding:5px;">
+                <button id="confirmJoinBtn" style="margin-top:10px;">Go</button>
+            </div>
+            <div id="viewCreate" style="display:none;">
+                <input id="inputCreateName" placeholder="Name" style="width:100%; padding:5px;">
+                <button id="confirmCreateBtn" style="margin-top:10px;">Create</button>
+            </div>
+            <button id="closeModalBtn" style="margin-top:20px;">Cancel</button>
+        </div>
+    </div>
+
+    <div id="debug-console">Loading Debugger...</div>
+</body>
+</html>
