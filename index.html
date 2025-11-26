@@ -3,291 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Grid | Login</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-    
-    <script type="module">
-        // === ⚙️ CONFIGURATION ===
-        const appConfig = {
-            appName: "Student Grid",
-            footerText: "© 2025 Open Student Network • Node v3.1 (No-Index)",
-            themeColor: "#1967d2" 
-        };
-
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, setDoc, doc, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-
-        // ===========================================================
-        // 🔑 KEYS LOCKED IN
-        // ===========================================================
-        const firebaseConfig = {
-            apiKey: "AIzaSyDb0JiAH1fFBbcLfF8pmteX2U7ViBkAfqE",
-            authDomain: "student-grid.firebaseapp.com",
-            projectId: "student-grid",
-            storageBucket: "student-grid.firebasestorage.app",
-            messagingSenderId: "34314858632",
-            appId: "1:34314858632:web:ce99f6b7e90d27a7f22f3d",
-            measurementId: "G-XVHGMWKVDD"
-        };
-        // ===========================================================
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const provider = new GoogleAuthProvider();
-
-        let currentRoom = "Global";
-        let unsubscribe = null;     
-
-        // DOM Elements
-        const loginBtn = document.getElementById('loginBtn');
-        const logoutBtn = document.getElementById('logoutBtn');
-        const appInterface = document.getElementById('appInterface');
-        const loginInterface = document.getElementById('loginInterface');
-        const msgInput = document.getElementById('msgInput');
-        const sendBtn = document.getElementById('sendBtn');
-        const chatBox = document.getElementById('chat-box');
-        const brandName = document.getElementById('brandName');
-        const userAvatar = document.getElementById('userAvatar');
-        const roomTitle = document.getElementById('roomTitle');
-        const userList = document.getElementById('userList');
-
-        brandName.innerText = appConfig.appName;
-        document.querySelector('footer').innerText = appConfig.footerText;
-
-        // --- AUTHENTICATION ---
-        loginBtn.addEventListener('click', () => signInWithPopup(auth, provider).catch(console.error));
-        logoutBtn.addEventListener('click', () => { signOut(auth); document.title = "Student Grid | Login"; });
-
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                loginInterface.style.display = 'none';
-                appInterface.style.display = 'flex';
-                renderAvatar(user);
-                await saveUserToDB(user);
-                loadUserList();
-                switchRoom("Global"); 
-            } else {
-                loginInterface.style.display = 'flex';
-                appInterface.style.display = 'none';
-                userAvatar.innerHTML = '';
-            }
-        });
-
-        async function saveUserToDB(user) {
-            try {
-                await setDoc(doc(db, "users", user.uid), {
-                    displayName: user.displayName,
-                    photoURL: user.photoURL,
-                    uid: user.uid,
-                    lastSeen: new Date().toISOString()
-                }, { merge: true });
-            } catch (e) { console.error(e); }
-        }
-
-        function renderAvatar(user) {
-            const imgTag = user.photoURL ? `<img src="${user.photoURL}">` : `<div class="letter-avatar">${user.displayName.charAt(0)}</div>`;
-            userAvatar.innerHTML = imgTag;
-            userAvatar.onclick = changeUsername;
-        }
-
-        async function changeUsername() {
-            const user = auth.currentUser;
-            const newName = prompt("Edit your Display Name:", user.displayName);
-            if (newName && newName.trim() !== "") {
-                try {
-                    await updateProfile(user, { displayName: newName });
-                    await saveUserToDB(user);
-                    renderAvatar(user);
-                } catch (error) { console.error(error); }
-            }
-        }
-
-        // --- NAVIGATION ---
-        window.startDM = function(targetUid, targetName) {
-            if(targetUid === auth.currentUser.uid) return alert("You cannot DM yourself.");
-            const dmRoomId = [auth.currentUser.uid, targetUid].sort().join("_");
-            switchRoom(dmRoomId, `🔒 ${targetName}`);
-        }
-
-        window.switchRoom = function(roomName, displayTitle = null) {
-            currentRoom = roomName;
-            roomTitle.innerText = displayTitle || `# ${roomName}`;
-            document.title = `Grid | ${displayTitle || roomName}`;
-            document.querySelectorAll('.nav-item, .user-item').forEach(el => el.classList.remove('active'));
-            loadMessages(roomName);
-        }
-
-        function loadUserList() {
-            const q = query(collection(db, "users"));
-            onSnapshot(q, (snapshot) => {
-                userList.innerHTML = '';
-                snapshot.forEach((doc) => {
-                    const u = doc.data();
-                    if(u.uid === auth.currentUser.uid) return;
-                    const div = document.createElement('div');
-                    div.className = 'user-item';
-                    div.innerHTML = `<span class="status-dot">●</span> ${u.displayName.split(' ')[0]}`;
-                    div.onclick = () => startDM(u.uid, u.displayName.split(' ')[0]);
-                    userList.appendChild(div);
-                });
-            });
-        }
-
-        // --- MESSAGING ---
-        const sendMessage = async () => {
-            const text = msgInput.value;
-            const user = auth.currentUser;
-            if (text.trim() === "" || !user) return;
-
-            try {
-                await addDoc(collection(db, "messages"), {
-                    text: text,
-                    uid: user.uid,
-                    displayName: user.displayName, 
-                    photoURL: user.photoURL,
-                    room: currentRoom,
-                    createdAt: new Date().toISOString() // Use string for easier sorting
-                });
-                msgInput.value = "";
-            } catch (e) { console.error(e); }
-        };
-
-        sendBtn.addEventListener('click', sendMessage);
-        msgInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-        });
-
-        // --- LOAD MESSAGES (CLIENT SIDE SORTING) ---
-        function loadMessages(room) {
-            if (unsubscribe) unsubscribe();
-            chatBox.innerHTML = '<div class="loading">Syncing node...</div>';
-
-            // REMOVED 'orderBy' to bypass Index Requirement
-            const q = query(collection(db, "messages"), where("room", "==", room));
-            
-            unsubscribe = onSnapshot(q, (snapshot) => {
-                chatBox.innerHTML = ''; 
-                if(snapshot.empty) {
-                    chatBox.innerHTML = '<div class="loading">No messages yet.</div>';
-                    return;
-                }
-
-                // 1. Get all messages
-                let msgs = [];
-                snapshot.forEach(doc => msgs.push(doc.data()));
-
-                // 2. Sort them in Javascript (Browser) instead of Database
-                msgs.sort((a, b) => (a.createdAt > b.createdAt) ? 1 : -1);
-
-                // 3. Render
-                msgs.forEach((msg) => {
-                    const isMe = auth.currentUser && msg.uid === auth.currentUser.uid;
-                    const msgDiv = document.createElement('div');
-                    msgDiv.className = `message-item ${isMe ? 'me' : ''}`;
-                    const safeName = msg.displayName ? msg.displayName.split(' ')[0] : "User";
-                    const clickAction = isMe ? '' : `onclick="startDM('${msg.uid}', '${safeName}')" style="cursor:pointer" title="DM this user"`;
-
-                    msgDiv.innerHTML = `
-                        <div class="avatar-small" ${clickAction}>
-                            <img src="${msg.photoURL}" onerror="this.style.display='none'">
-                        </div>
-                        <div class="msg-content">
-                            <div class="msg-header">${safeName}</div>
-                            <div class="msg-text">${msg.text}</div>
-                        </div>
-                    `;
-                    chatBox.appendChild(msgDiv);
-                });
-                chatBox.scrollTop = chatBox.scrollHeight;
-            });
-        }
-    </script>
-
+    <title>Student Grid | Maintenance</title>
     <style>
-        :root { --bg: #f8f9fa; --white: #ffffff; --border: #dadce0; --blue: #1967d2; --text: #3c4043; --gray: #5f6368; }
-        body { font-family: 'Roboto', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
-        header { height: 64px; background: var(--white); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 24px; justify-content: space-between; }
-        .brand { display: flex; align-items: center; gap: 12px; }
-        .logo-text { font-size: 20px; font-weight: 500; }
-        #userAvatar img { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
-        #userAvatar img:hover { border-color: var(--blue); }
-        #loginInterface { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        #loginBtn { background: var(--blue); color: white; border: none; padding: 12px 30px; border-radius: 4px; cursor: pointer; font-size: 16px; }
-        #appInterface { display: none; height: calc(100vh - 65px); display: flex; }
-        aside { width: 260px; background: var(--white); border-right: 1px solid var(--border); padding: 20px; display: none; flex-direction: column; overflow-y: auto; }
-        @media(min-width: 768px) { aside { display: flex; } }
-        .section-header { font-size: 11px; font-weight: bold; color: var(--gray); text-transform: uppercase; margin: 20px 0 10px; letter-spacing: 0.5px; }
-        .section-header:first-child { margin-top: 0; }
-        .nav-item, .user-item { padding: 8px 12px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); margin-bottom: 2px; }
-        .nav-item:hover, .user-item:hover { background: #f1f3f4; }
-        .active { background: #e8f0fe; color: var(--blue); font-weight: 500; }
-        .status-dot { color: #1e8e3e; font-size: 10px; }
-        main { flex: 1; display: flex; flex-direction: column; background: var(--white); }
-        #room-header { padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 500; color: var(--text); font-size: 16px; }
-        #chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-        .loading { text-align: center; color: #ccc; margin-top: 20px; font-size: 14px; }
-        .message-item { display: flex; gap: 10px; max-width: 75%; animation: fadeIn 0.2s; }
-        .message-item.me { align-self: flex-end; flex-direction: row-reverse; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        .avatar-small img { width: 32px; height: 32px; border-radius: 50%; }
-        .msg-content { padding: 10px 14px; border-radius: 18px; background: #f1f3f4; font-size: 14px; line-height: 1.4; }
-        .message-item.me .msg-content { background: var(--blue); color: white; }
-        .msg-header { font-size: 11px; margin-bottom: 4px; font-weight: bold; color: var(--gray); }
-        .message-item.me .msg-header { display: none; }
-        .input-container { padding: 15px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
-        input { flex: 1; padding: 12px 20px; border: 1px solid var(--border); border-radius: 24px; outline: none; background: #f8f9fa; }
-        input:focus { background: var(--white); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        button#sendBtn { background: none; border: none; color: var(--blue); font-size: 20px; cursor: pointer; }
-        footer { text-align: center; font-size: 11px; color: #ccc; padding: 5px; background: var(--bg); }
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        .container { border: 1px solid #30363d; padding: 40px; border-radius: 6px; background: #161b22; }
+        h1 { color: #ff7b72; margin-bottom: 10px; }
+        p { color: #8b949e; }
+        .blink { animation: blinker 1s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
     </style>
 </head>
 <body>
-
-    <header>
-        <div class="brand">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1967d2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-            </svg>
-            <div class="logo-text" id="brandName">Student Grid</div>
-        </div>
-        <div id="userAvatar" title="Click to edit username"></div>
-    </header>
-
-    <div id="loginInterface">
-        <h2 style="color: #5f6368;">Portal Access</h2>
-        <button id="loginBtn">Sign in with Google</button>
+    <div class="container">
+        <h1>Sorry for the Inconvenience🙇</h1>
+        <p>The Student Grid is currently undergoing maintenance.</p>
+        <p style="margin-top: 20px;">Error Code: <span style="color:#7ee787">ERR_SERVER_MAINTENANCE</span></p>
+        <p class="blink">_</p>
     </div>
-
-    <div id="appInterface">
-        <aside>
-            <div class="section-header">Grid Rooms</div>
-            <div class="nav-item active" onclick="switchRoom('Global')"><span>📢</span> Global</div>
-            <div class="nav-item" onclick="switchRoom('Physics-7B')"><span>⚛️</span> Physics 7B</div>
-            <div class="nav-item" onclick="switchRoom('Gaming')"><span>🎮</span> Gaming</div>
-
-            <div class="section-header">Classmates</div>
-            <div id="userList">
-                <div style="padding:10px; font-size:12px; color:#999;">Waiting for users...</div>
-            </div>
-
-            <div style="flex:1"></div>
-            <button id="logoutBtn" style="background:none; border:none; color:red; text-align:left; cursor:pointer; padding:10px; font-size:12px;">Disconnect</button>
-        </aside>
-
-        <main>
-            <div id="room-header"># Global</div>
-            <div id="chat-box"></div>
-            <div class="input-container">
-                <input type="text" id="msgInput" placeholder="Type a message..." autocomplete="off">
-                <button id="sendBtn">➤</button>
-            </div>
-        </main>
-    </div>
-
-    <footer>Loading...</footer>
-
 </body>
 </html>
